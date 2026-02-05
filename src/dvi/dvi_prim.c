@@ -60,6 +60,27 @@ void dvi_context_flush_text(fz_context *ctx, dvi_context *dc, dvi_state *st)
   {
     if (!dc->dev)
       abort();
+
+    float thickness = 0.0;
+    const char *s = getenv("TEXT_THICKNESS");
+    if (s) {
+        char *endptr;
+        thickness = strtof(s, &endptr);
+    }
+
+    if(thickness > 0.2) {
+        fz_set_aa_level(ctx, 4);
+    }
+
+    fz_stroke_state stroke = { 0 };
+    stroke.linewidth = thickness;
+    stroke.start_cap = FZ_LINECAP_BUTT;
+    stroke.dash_cap = FZ_LINECAP_ROUND;
+    stroke.end_cap = FZ_LINECAP_ROUND;
+    stroke.linejoin = FZ_LINEJOIN_MITER;
+
+    fz_stroke_text(ctx, dc->dev, dc->text, &stroke, fz_identity, fz_device_rgb(ctx), st->gs.colors.fill, 1.0, color_params);
+
     fz_fill_text(ctx, dc->dev, dc->text, fz_identity, fz_device_rgb(ctx),
         st->gs.colors.fill, 1.0, color_params);
     fz_drop_text(ctx, dc->text);
