@@ -802,6 +802,14 @@ pdf_document *dvi_resmanager_get_pdf(fz_context *ctx, dvi_resmanager *rm, const 
 
 fz_image *dvi_resmanager_get_img(fz_context *ctx, dvi_resmanager *rm, const char *filename)
 {
+  while (filename[0] == '.' && filename[1] == '/')
+  {
+    filename += 2;
+    while (*filename == '/')
+      filename++;
+  }
+
+  fprintf(stderr, "[dvi] loading image %s\n", filename);
   for (cell_image *cell = rm->first_image; cell; cell = cell->next)
     if (strcmp(filename, cell->name) == 0)
       return cell->img;
@@ -819,6 +827,7 @@ fz_image *dvi_resmanager_get_img(fz_context *ctx, dvi_resmanager *rm, const char
   }
   fz_catch(ctx)
   {
+    fprintf(stderr, "[dvi] error while loading: %s\n", fz_caught_message(ctx));
     if (cell)
       fz_free(ctx, cell);
     if (pname)

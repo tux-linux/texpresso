@@ -214,7 +214,7 @@ ttbc_input_handle_t *ttstub_input_open(const char *path,
 
     strcpy(last_open, cached);
 
-    txp_input *input = calloc(1, sizeof(txp_input_file));
+    txp_input_file *input = calloc(1, sizeof(txp_input_file));
     if (!input)
       abort();
     input->id = -1;
@@ -324,7 +324,7 @@ ttbc_input_handle_t *ttstub_input_open(const char *path,
     if (!f)
       return NULL;
 
-    txp_input *input = calloc(1, sizeof(txp_input_file));
+    txp_input_file *input = calloc(1, sizeof(txp_input_file));
     if (!input)
       abort();
     input->id = -1;
@@ -476,12 +476,12 @@ size_t ttstub_input_seek(ttbc_input_handle_t *handle,
       input->buf_pos = input->buf_len = 0;
     }
 
-    return 0;
+    return input->file_pos + input->buf_pos;
   }
   return fseek(input_as_file(handle), offset, whence);
 }
 
-ssize_t ttstub_input_read(ttbc_input_handle_t *handle, char *data, size_t len)
+static ssize_t internal_input_read(ttbc_input_handle_t *handle, char *data, size_t len)
 {
   if (texpresso)
   {
@@ -529,6 +529,24 @@ ssize_t ttstub_input_read(ttbc_input_handle_t *handle, char *data, size_t len)
   }
 
   return fread(data, 1, len, input_as_file(handle));
+}
+
+ssize_t ttstub_input_read(ttbc_input_handle_t *handle, char *data, size_t len)
+{
+  ssize_t result = internal_input_read(handle, data, len);
+
+  if (result <= 0)
+      return result;
+
+  while (result <= len)
+  {
+    ssize_t delta = internal_input_read(handle, data + result, len - result);
+    if (delta <= 0)
+      return result;
+    result += delta;
+  }
+
+  return result;
 }
 
 int ttstub_input_ungetc(ttbc_input_handle_t *handle, int ch)
@@ -835,7 +853,7 @@ static void usage(char *argv0)
 
 // Generate everything based on 1738978143
 // (February 8, 2025)
-#define EXECUTION_DATE 1738978143
+// #define EXECUTION_DATE 1738978143
 
 static const char *format_path(const char *ext)
 {
@@ -896,7 +914,7 @@ static bool bootstrap_format(void)
   in_initex_mode = true;
   primary_document = format_name;
   tt_history_t result =
-      tt_run_engine("texpresso.fmt", format_name, EXECUTION_DATE);
+      tt_run_engine("texpresso.fmt", format_name, 0);
   in_initex_mode = false;
   primary_document = NULL;
 
@@ -1058,9 +1076,21 @@ int main(int argc, char **argv)
   in_initex_mode = false;
   primary_document = doc_path;
 
+  // Determine build date.
+  // Use SOURCE_DATE_EPOCH if it set.
+  // Default to current timestamp otherwise.
+  time_t build_date;
+
+  char *epoch_env = getenv("SOURCE_DATE_EPOCH");
+
+  if (epoch_env != NULL)
+    build_date = (time_t)strtoll(epoch_env, NULL, 10);
+  else
+    build_date = time(NULL);
+
   // Run engine.
   tt_history_t result =
-      tt_run_engine("texpresso.fmt", primary_document, EXECUTION_DATE);
+      tt_run_engine("texpresso.fmt", primary_document, build_date);
 
   fprintf(stderr, "Document generation: ");
   switch (result)

@@ -58,6 +58,11 @@ typedef struct
   mark_t snap;
 } process_t;
 
+enum
+{
+  MAX_PROCESS = 32
+};
+
 struct tex_engine
 {
   struct txp_engine_class *_class;
@@ -66,13 +71,14 @@ struct tex_engine
   char *engine_path;
   char *inclusion_path;
   bool use_texlive;
+  bool stream_mode;
 
   filesystem_t *fs;
   state_t st;
   log_t *log;
 
   channel_t *c;
-  process_t processes[32];
+  process_t processes[MAX_PROCESS];
   int process_count;
 
   trace_entry_t *trace;
@@ -237,6 +243,9 @@ static bool read_query(struct tex_engine *self, channel_t *t, query_t *q)
 
 static void decimate_processes(struct tex_engine *self)
 {
+  bool keep[MAX_PROCESS] = {0,};
+
+  int target = 32;
   fprintf(stderr, "before process decimation:\n");
   for  (int i = 0; i < self->process_count; ++i)
   {
@@ -245,18 +254,41 @@ static void decimate_processes(struct tex_engine *self)
             p->trace_len,
             p->trace_len == 0 ? 0 : self->trace[p->trace_len - 1].time,
             p->pid);
+    if (p->trace_len >= target)
+    {
+        keep[i] = true;
+        target *= 2;
+    }
   }
 
-  int i = 0, bound = (self->process_count - 8) / 2;
-  while (i < bound)
+  target = self->processes[self->process_count - 1].trace_len;
+  int delta = 32;
+  for (int i = self->process_count - 1; i >= 0; --i)
   {
-    close_process(&self->processes[2*i]);
-    self->processes[i] = self->processes[2*i+1];
-    i++;
+    process_t *p = &self->processes[i];
+    if (p->trace_len <= target)
+    {
+      keep[i] = true;
+      delta *= 2;
+      target -= delta;
+    }
+    else if (keep[i])
+    {
+      delta *= 2;
+      target = p->trace_len - delta;
+    }
   }
-  for (int j = bound * 2; j < self->process_count; ++j)
+
+  int i = 0;
+  for (int j = 0; j < self->process_count; j++)
   {
-    self->processes[i] = self->processes[j];
+    if (!keep[j])
+    {
+      close_process(&self->processes[j]);
+      continue;
+    }
+    if (i != j)
+      self->processes[i] = self->processes[j];
     i++;
   }
   self->process_count = i;
@@ -482,7 +514,11 @@ static void answer_query(fz_context *ctx, struct tex_engine *self, query_t *q)
       if (q->tag == Q_OPRD)
       {
         e = filesystem_lookup(self->fs, q->open.path);
-        if (!e || !entry_data(e))
+        if (self->stream_mode && e && entry_data(e))
+        {
+          // Stream mode: VFS data available, skip filesystem lookup
+        }
+        else if (!e || !entry_data(e))
         {
           fs_path = lookup_path(self, q->open.path, fs_path_buffer, NULL);
           if (!fs_path)
@@ -513,12 +549,22 @@ static void answer_query(fz_context *ctx, struct tex_engine *self, query_t *q)
       {
         if (e->saved.level < FILE_READ)
         {
-          if (!fs_path)
+          if (!fs_path && !(self->stream_mode && e->edit_data))
             fs_path = lookup_path(self, q->open.path, fs_path_buffer, NULL);
           if (!fs_path)
           {
             if (!e->edit_data)
+            {
+              if (self->stream_mode)
+              {
+                log_fileentry(ctx, self->log, e);
+                record_seen(self, e, INT_MAX, q->time);
+                a.tag = A_PASS;
+                channel_write_answer(self->c, p->fd, &a);
+                break;
+              }
               mabort("path: %s\nmode:%c\n", q->open.path, (q->tag == Q_OPRD) ? 'r' : 'w');
+            }
             e->saved.level = FILE_READ;
             memset(&e->fs_stat, 0, sizeof(e->fs_stat));
           }
@@ -854,7 +900,7 @@ static void answer_query(fz_context *ctx, struct tex_engine *self, query_t *q)
 
     case Q_CHLD:
     {
-      if (self->process_count == 32)
+      if (self->process_count == MAX_PROCESS)
       {
         decimate_processes(self);
         p = get_process(self);
@@ -1173,8 +1219,11 @@ static bool rollback_end(fz_context *ctx, struct tex_engine *self, int *tracep, 
       channel_flush(self->c, p->fd);
       return false;
     }
-    trace_len -= 1;
-    revert_trace(&self->trace[trace_len]);
+    if (trace_len > 0)
+    {
+      trace_len -= 1;
+      revert_trace(&self->trace[trace_len]);
+    }
     if (trace_len > 0)
       self->rollback.offset = self->trace[trace_len].seen;
   }
@@ -1255,15 +1304,13 @@ static void rollback_add_change(fz_context *ctx, struct tex_engine *self, fileen
 
   if (e->seen < changed && trace_len == get_process(self)->trace_len)
   {
+    // A pending message might update e->seen
     if (process_pending_messages(ctx, self))
       return;
-
     trace_len = self->rollback.trace_len = get_process(self)->trace_len;
-
-    // A pending message might have updated e->seen
-    if (e->seen < changed)
-      return;
   }
+  if (e->seen < changed)
+    return;
 
   while (e->seen >= changed)
   {
@@ -1361,6 +1408,7 @@ static fileentry_t *engine_find_file(txp_engine *_self, fz_context *ctx, const c
 txp_engine *txp_create_tex_engine(fz_context *ctx,
                                   const char *engine_path,
                                   bool use_texlive,
+                                  bool stream_mode,
                                   const char *inclusion_path,
                                   const char *tex_name,
                                   dvi_reshooks hooks)
@@ -1383,6 +1431,7 @@ txp_engine *txp_create_tex_engine(fz_context *ctx,
 
   self->dvi = incdvi_new(ctx, hooks);
   self->use_texlive = use_texlive;
+  self->stream_mode = stream_mode;
 
   self->stex = synctex_new(ctx);
   self->rollback.trace_len = NOT_IN_TRANSACTION;

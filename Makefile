@@ -8,17 +8,14 @@ all:
 	@echo "#"
 	@echo "# When using tectonic, first time launch needs to download many files and can be slow."
 	@echo "# You can speed-up this process using:"
-	@echo "#"
 	@echo "#   make fill-tectonic-cache"
 	@echo "#"
 	@echo "# After, you can try texpresso by running:"
-	@echo "#"
 	@echo "#   build/texpresso test/simple.tex"
 	@echo "#"
 	@echo "# Or:"
 	@echo "#   build/texpresso -texlive test/simple.tex"
 	@echo "#   build/texpresso -tectonic test/simple.tex"
-	@echo "#"
 
 common:
 	$(MAKE) -C src/common
@@ -91,6 +88,10 @@ test-tectonic:
 	build/texpresso-xetex -tectonic test/simple.tex
 	rm simple.aux simple.log simple.xdv
 
+test-open-base64:
+	printf '(open-base64 "test/simple.tex" "%s")\n' "$$(base64 < test/simple.tex | tr -d '\n')" | \
+	SDL_VIDEODRIVER=dummy build/texpresso -test-initialize test/simple.tex
+
 test-texpresso:
 	SDL_VIDEODRIVER=dummy build/texpresso -test-initialize test/simple.tex
 
@@ -100,4 +101,10 @@ test-texpresso-texlive:
 test-texpresso-tectonic:
 	SDL_VIDEODRIVER=dummy build/texpresso -tectonic -test-initialize test/simple.tex
 
-.PHONY: all dev clean config texpresso common texpresso-xetex re2c compile_commands.json fill-tectonic-cache test-texlive test-tectonic test-texpresso
+test-stream:
+	SDL_VIDEODRIVER=dummy build/texpresso -stream -test-initialize test/simple.tex
+
+test-stream-pipe:
+	test/test_stream.sh
+
+.PHONY: all dev clean config texpresso common texpresso-xetex re2c compile_commands.json fill-tectonic-cache test-texlive test-tectonic test-texpresso test-stream test-stream-pipe test-open-base64

@@ -3,7 +3,7 @@
 The process should be started from the editor passing the root TeX file as argument:
 
 ```
-texpressso [-I path]* [-json] [-lines] [-texlive] [-tectonic] [-test-initialize] <some-dir>/root.tex
+texpressso [-I path]* [-json] [-lines] [-texlive] [-tectonic] [-test-initialize] [-stream] <some-dir>/root.tex
 ```
 
 The rest of the communication will happen on stdin/stdout:
@@ -16,6 +16,7 @@ Description of the arguments:
 - `-texlive`: use TeXlive as TeX distribution.
 - `-tectonic`: use Tectonic as TeX distribution.
 - `-test-initialize`: run a single cycle, used only for initialization test.
+- `-stream`: skip filesystem lookups for user files. Files not yet pushed are treated as missing and the engine backtracks when they arrive.
 - `-I path`: populate an "include path" in which files should be looked up in priority
 
 The include path is useful if one uses a build system that puts auxiliary files in a dedicated build directory, while the TeX sources are in a separate source directory. In this case, TeXpresso can be started using `texpresso -I build/ source/main.tex`.
@@ -61,6 +62,12 @@ Alternatively, one can use line-based communication (using `change-lines` for ed
 
 Populate TeXpresso VFS with a file at "path" storing "contents".
 
+
+```scheme
+(open-base64 "path" "base64-contents")
+```
+
+Populate TeXpresso VFS with a file at "path" transferring binary data in base64 format. TeXpresso decodes "base64-contents" into raw bytes before storing.
 
 ```scheme
 (close "path")

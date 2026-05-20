@@ -38,6 +38,7 @@
 #include "vstack.h"
 #include "prot_parser.h"
 #include "editor.h"
+#include "base64.h"
 
 struct persistent_state *pstate;
 
@@ -821,6 +822,8 @@ static void interpret_open(struct persistent_state *ps,
     e->edit_data = fz_new_buffer_from_copied_data(ps->ctx, data, size);
     if (e->fs_data)
       changed = find_diff(e->fs_data, data, size);
+    else if (e->seen >= 0)
+      changed = 0;
   }
 
   if (changed >= 0)
@@ -913,7 +916,23 @@ static void interpret_command(struct persistent_state *ps,
   switch (cmd.tag)
   {
     case EDIT_OPEN:
-      interpret_open(ps, ui, cmd.open.path, cmd.open.data, cmd.open.length);
+      if (cmd.open.base64)
+      {
+        unsigned char *buf = malloc(cmd.open.length);
+        if (!buf) break;
+        memcpy(buf, cmd.open.data, cmd.open.length);
+        int decoded_len = base64_decode(buf, cmd.open.length);
+        if (decoded_len < 0)
+        {
+          fprintf(stderr, "[command] open-base64: invalid base64 data\n");
+          free(buf);
+          break;
+        }
+        interpret_open(ps, ui, cmd.open.path, (const char *)buf, decoded_len);
+        free(buf);
+      }
+      else
+        interpret_open(ps, ui, cmd.open.path, cmd.open.data, cmd.open.length);
       break;
 
     case EDIT_CLOSE:
@@ -1064,7 +1083,7 @@ bool texpresso_main(struct persistent_state *ps)
       return 0;
     }
   }
-  else if (!(using_texlive = texlive_available()) || !tectonic_available())
+  else if (!(using_texlive = texlive_available()) && !tectonic_available())
   {
     fprintf(stderr,
             "[fatal] cannot find tectonic nor kpsewhich (texlive)"
@@ -1096,7 +1115,8 @@ bool texpresso_main(struct persistent_state *ps)
       ui->eng = txp_create_dvi_engine(ps->ctx, ps->doc_name, hooks);
     else
       ui->eng = txp_create_tex_engine(ps->ctx, engine_path, using_texlive,
-                                      ps->inclusion_path, ps->doc_name, hooks);
+                                      ps->stream_mode, ps->inclusion_path,
+                                      ps->doc_name, hooks);
   }
 
   ui->sdl_renderer = ps->renderer;
