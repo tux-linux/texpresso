@@ -93,6 +93,12 @@ struct tex_engine
   struct {
     int trace_len, offset, flush;
   } rollback;
+
+  struct {
+    bool active;
+    query_t query;
+    char path[1024];
+  } deferred;
 };
 
 // Backtrackable process state & VFS representation
@@ -196,6 +202,7 @@ static void prepare_process(fz_context *ctx, struct tex_engine *self)
 {
   if (self->process_count == 0)
   {
+    self->deferred.active = false;
     log_rollback(ctx, self->log, self->restart);
     self->process_count = 1;
     process_t *p = get_process(self);
@@ -524,10 +531,30 @@ static void answer_query(fz_context *ctx, struct tex_engine *self, query_t *q)
           if (!fs_path)
           {
             e = filesystem_lookup_or_create(ctx, self->fs, q->open.path);
-            log_fileentry(ctx, self->log, e);
-            record_seen(self, e, INT_MAX, q->time);
-            a.tag = A_PASS;
-            channel_write_answer(self->c, p->fd, &a);
+            if (e->promised && !self->deferred.active)
+            {
+              // File was promised and is missing: notify the editor and wait
+              // for answer
+              self->deferred.active = true;
+              self->deferred.query = *q;
+              strncpy(self->deferred.path, q->open.path,
+                      sizeof(self->deferred.path) - 1);
+              self->deferred.path[sizeof(self->deferred.path) - 1] = '\0';
+              self->deferred.query.open.path = self->deferred.path;
+              editor_notify_lookup(q->open.path, strlen(q->open.path), true,
+                                   LOOKUP_PROMISED);
+            }
+            else
+            {
+              // File is missing: record this observation and mark the lookup
+              // as failed.
+              log_fileentry(ctx, self->log, e);
+              record_seen(self, e, INT_MAX, q->time);
+              a.tag = A_PASS;
+              editor_notify_lookup(q->open.path, strlen(q->open.path), true,
+                                   LOOKUP_FAILED);
+              channel_write_answer(self->c, p->fd, &a);
+            }
             break;
           }
         }
@@ -560,6 +587,8 @@ static void answer_query(fz_context *ctx, struct tex_engine *self, query_t *q)
                 log_fileentry(ctx, self->log, e);
                 record_seen(self, e, INT_MAX, q->time);
                 a.tag = A_PASS;
+                editor_notify_lookup(q->open.path, strlen(q->open.path),
+                                     q->tag == Q_OPRD, LOOKUP_FAILED);
                 channel_write_answer(self->c, p->fd, &a);
                 break;
               }
@@ -651,6 +680,7 @@ static void answer_query(fz_context *ctx, struct tex_engine *self, query_t *q)
       int n = strlen(q->open.path);
       a.open.path_len = n;
       a.tag = A_OPEN;
+      editor_notify_lookup(q->open.path, n, q->tag == Q_OPRD, LOOKUP_SUCCESSFUL);
       memmove(channel_get_buffer(self->c, n), q->open.path, n);
       channel_write_answer(self->c, p->fd, &a);
       break;
@@ -934,6 +964,7 @@ static void revert_trace(trace_entry_t *te)
 
 static void rollback_processes(fz_context *ctx, struct tex_engine *self, int reverted, int trace)
 {
+  self->deferred.active = false;
   fprintf(
     stderr,
     "rolling back to position %d\nbefore rollback: %d bytes of output\n",
@@ -1095,6 +1126,20 @@ static bool engine_step(txp_engine *_self, fz_context *ctx, bool restart_if_need
   if (restart_if_needed)
     prepare_process(ctx, self);
 
+  if (self->deferred.active)
+  {
+    fileentry_t *e = filesystem_lookup(self->fs, self->deferred.path);
+    if (e && e->edit_data)
+    {
+      e->seen = -1;
+      self->deferred.active = false;
+      answer_query(ctx, self, &self->deferred.query);
+      channel_flush(self->c, get_process(self)->fd);
+      return 1;
+    }
+    return 0;
+  }
+
   if (engine_get_status(_self) == DOC_RUNNING)
   {
     query_t q;
@@ -1190,6 +1235,10 @@ static void rollback_begin(fz_context *ctx, struct tex_engine *self)
   if (self->rollback.trace_len != NOT_IN_TRANSACTION)
     abort();
 
+  // Skip if no worker yet (-stream paused at startup)
+  if (self->process_count == 0)
+    return;
+
   self->rollback.trace_len = get_process(self)->trace_len;
   self->rollback.offset = -1;
   self->rollback.flush = 0;
@@ -1200,9 +1249,10 @@ static bool rollback_end(fz_context *ctx, struct tex_engine *self, int *tracep, 
   int trace_len = self->rollback.trace_len;
   self->rollback.trace_len = NOT_IN_TRANSACTION;
 
-  // Assert we are in a transaction
+  // No transaction opened: legitimate when begin was a no-op (no worker
+  // at begin, possibly spawned mid-iteration by an EDIT_RESUME bootstrap).
   if (trace_len == NOT_IN_TRANSACTION)
-    abort();
+    return false;
 
   process_t *p = get_process(self);
 
@@ -1298,9 +1348,9 @@ static void rollback_add_change(fz_context *ctx, struct tex_engine *self, fileen
   int trace_len = self->rollback.trace_len;
   // if (changed > 0) changed--;
 
-  // Assert we are in a transaction
+  // No transaction opened: legitimate when begin was a no-op (no worker).
   if (trace_len == NOT_IN_TRANSACTION)
-    mabort();
+    return;
 
   if (e->seen < changed && trace_len == get_process(self)->trace_len)
   {
@@ -1435,6 +1485,7 @@ txp_engine *txp_create_tex_engine(fz_context *ctx,
 
   self->stex = synctex_new(ctx);
   self->rollback.trace_len = NOT_IN_TRANSACTION;
+  self->deferred.active = false;
 
   return (txp_engine*)self;
 }

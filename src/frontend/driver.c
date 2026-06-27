@@ -254,8 +254,11 @@ int main(int argc, const char **argv)
     if (stream_mode)
     {
       // In stream mode, the file may not exist on disk yet.
-      // Construct doc_path from cwd + doc_arg basename.
-      snprintf(doc_path, PATH_MAX, "%s/%s", work_dir, doc_arg);
+      // Absolute paths used as-is; relative paths resolved against cwd.
+      if (doc_arg[0] == '/')
+        snprintf(doc_path, PATH_MAX, "%s", doc_arg);
+      else
+        snprintf(doc_path, PATH_MAX, "%s/%s", work_dir, doc_arg);
     }
     else
     {
@@ -339,7 +342,9 @@ int main(int argc, const char **argv)
       .use_tectonic = use_tectonic,
       .use_texlive = use_texlive,
       .initialize_only = initialize_only,
-      .stream_mode = stream_mode
+      .stream_mode = stream_mode,
+      // In stream mode, start paused: editor primes the VFS before (resume).
+      .paused = stream_mode,
   };
 
   int exit_code = 0;

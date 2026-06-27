@@ -1,4 +1,4 @@
-all:
+all: | Makefile.config
 	$(MAKE) common texpresso texpresso-xetex
 	@echo "# Build succeeded."
 	@echo "# TeXpresso detects package providers (TeXlive or Tectonic) by looking in PATH:"
@@ -17,16 +17,16 @@ all:
 	@echo "#   build/texpresso -texlive test/simple.tex"
 	@echo "#   build/texpresso -tectonic test/simple.tex"
 
-common:
+common: | Makefile.config
 	$(MAKE) -C src/common
 
-texpresso:
+texpresso: | Makefile.config
 	$(MAKE) -C src/frontend texpresso
 
-dev:
+dev: | Makefile.config
 	$(MAKE) -C src texpresso-dev
 
-debug:
+debug: | Makefile.config
 	$(MAKE) -C src texpresso-debug texpresso-debug-proxy
 
 clean:
@@ -90,21 +90,24 @@ test-tectonic:
 
 test-open-base64:
 	printf '(open-base64 "test/simple.tex" "%s")\n' "$$(base64 < test/simple.tex | tr -d '\n')" | \
-	SDL_VIDEODRIVER=dummy build/texpresso -test-initialize test/simple.tex
+	env SDL_VIDEODRIVER=dummy build/texpresso -test-initialize test/simple.tex
 
 test-texpresso:
-	SDL_VIDEODRIVER=dummy build/texpresso -test-initialize test/simple.tex
+	env SDL_VIDEODRIVER=dummy build/texpresso -test-initialize test/simple.tex
 
 test-texpresso-texlive:
-	SDL_VIDEODRIVER=dummy build/texpresso -texlive -test-initialize test/simple.tex
+	env SDL_VIDEODRIVER=dummy build/texpresso -texlive -test-initialize test/simple.tex
 
 test-texpresso-tectonic:
-	SDL_VIDEODRIVER=dummy build/texpresso -tectonic -test-initialize test/simple.tex
+	env SDL_VIDEODRIVER=dummy build/texpresso -tectonic -test-initialize test/simple.tex
 
 test-stream:
-	SDL_VIDEODRIVER=dummy build/texpresso -stream -test-initialize test/simple.tex
+	bash test/test_stream.sh
 
-test-stream-pipe:
-	test/test_stream.sh
+test-register:
+	bash test/test-register.sh
 
-.PHONY: all dev clean config texpresso common texpresso-xetex re2c compile_commands.json fill-tectonic-cache test-texlive test-tectonic test-texpresso test-stream test-stream-pipe test-open-base64
+test-lookup-file:
+	bash test/test-lookup-file.sh
+
+.PHONY: all dev clean config texpresso common texpresso-xetex re2c compile_commands.json fill-tectonic-cache test-texlive test-tectonic test-texpresso test-stream test-open-base64 test-register test-lookup-file
